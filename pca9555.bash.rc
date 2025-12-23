@@ -1,0 +1,101 @@
+# Usage: pca9555_set_line <bus> <addr_hex> <line_num> <val>
+# Example: pca9555_set_line 52 0x50 0 1
+pca9555_set_line() {
+    local bus=$1
+    local addr=$2
+    local line=$3
+    local val=$4
+
+    # PCA9555 Register Definitions
+    local REG_OUTPUT_0=0x02
+    local REG_OUTPUT_1=0x03
+    local REG_CONFIG_0=0x06
+    local REG_CONFIG_1=0x07
+
+    local reg_out
+    local reg_cfg
+    local shift
+    local mask
+
+    # 1. Determine Port (0 or 1) and Bit Mask
+    if [ "$line" -lt 8 ]; then
+        reg_out=$REG_OUTPUT_0
+        reg_cfg=$REG_CONFIG_0
+        shift=$line
+    elif [ "$line" -lt 16 ]; then
+        reg_out=$REG_OUTPUT_1
+        reg_cfg=$REG_CONFIG_1
+        shift=$((line - 8))
+    else
+        echo "Error: Line number must be 0-15" >&2
+        return 1
+    fi
+
+    # Create hex mask for i2cset (e.g., 0x01, 0x02, ... 0x80)
+    mask=$(printf "0x%02x" "$((1 << shift))")
+
+    # 2. Set Direction to OUTPUT (Config Register: 0=Output)
+    # We use the mask to clear ONLY the specific bit to 0.
+    i2cset -y -m "$mask" "$bus" "$addr" "$reg_cfg" 0x00
+    if [ $? -ne 0 ]; then echo "Error setting direction" >&2; return 1; fi
+
+    # 3. Set Value (Output Register)
+    if [ "$val" -eq 1 ]; then
+        # Write 1 (HIGH): Use mask to set bit to 1
+        i2cset -y -m "$mask" "$bus" "$addr" "$reg_out" 0xFF
+    else
+        # Write 0 (LOW): Use mask to set bit to 0
+        i2cset -y -m "$mask" "$bus" "$addr" "$reg_out" 0x00
+    fi
+}
+
+# Usage: pca9555_get_line <bus> <addr_hex> <line_num>
+# Example: pca9555_get_line 52 0x50 0
+# Returns: 0 or 1
+pca9555_get_line() {
+    local bus=$1
+    local addr=$2
+    local line=$3
+
+    local REG_INPUT_0=0x00
+    local REG_INPUT_1=0x01
+    local REG_CONFIG_0=0x06
+    local REG_CONFIG_1=0x07
+
+    local reg_in
+    local reg_cfg
+    local shift
+
+    # 1. Determine Port (0 or 1)
+    if [ "$line" -lt 8 ]; then
+        reg_in=$REG_INPUT_0
+        reg_cfg=$REG_CONFIG_0
+        shift=$line
+    elif [ "$line" -lt 16 ]; then
+        reg_in=$REG_INPUT_1
+        reg_cfg=$REG_CONFIG_1
+        shift=$((line - 8))
+    else
+        echo "Error: Line number must be 0-15" >&2
+        return 1
+    fi
+
+    local mask_val=$((1 << shift))
+    local mask_hex=$(printf "0x%02x" "$mask_val")
+
+    # 2. Set Direction to INPUT (Config Register: 1=Input)
+    # We write the mask value to set that specific bit to 1.
+    i2cset -y -m "$mask_hex" "$bus" "$addr" "$reg_cfg" "$mask_hex"
+    if [ $? -ne 0 ]; then echo "Error setting direction" >&2; return 1; fi
+
+    # 3. Read Input Register
+    local val_hex
+    val_hex=$(i2cget -y "$bus" "$addr" "$reg_in")
+    if [ $? -ne 0 ]; then echo "Error reading input" >&2; return 1; fi
+
+    # 4. Extract Bit Value
+    local val_dec=$((val_hex))
+    local bit_val=$(( (val_dec >> shift) & 1 ))
+
+    echo "$bit_val"
+}
